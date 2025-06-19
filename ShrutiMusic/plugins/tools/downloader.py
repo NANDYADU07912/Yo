@@ -1,104 +1,59 @@
-from pyrogram import Client, filters
+from pyrogram import filters
 from pyrogram.types import Message
-from ShrutiMusic import app  # aapke project ka import
+from ShrutiMusic import app
 import requests
-import yt_dlp
 import os
-import asyncio
 
-
-def get_video_info_allvideo(url: str):
-    try:
-        response = requests.post(
-            "https://allvideodownloader.cc/wp-json/aio-dl/video-data/",
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0",
-            },
-            data={
-                "url": url,
-                "token": "c99f113fab0762d216b4545e5c3d615eefb30f0975fe107caab629d17e51b52d",
-            },
-            timeout=15,
-        )
-
-        if response.status_code != 200:
-            return None
-
-        data = response.json()
-        media = max(data["medias"], key=lambda x: int(x["quality"].replace("p", "")))
-        return {
-            "title": data["title"],
-            "url": media["url"]
-        }
-    except:
-        return None
-
-
-async def download_video_ytdlp(url: str, file_name="ytvideo.mp4"):
-    try:
-        ydl_opts = {
-            'outtmpl': file_name,
-            'format': 'bestvideo+bestaudio/best',
-            'merge_output_format': 'mp4',
-            'quiet': True
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        return file_name
-    except Exception as e:
-        return None
-
-
-@app.on_message(filters.command("vid") & filters.private)
-async def video_downloader(client: Client, message: Message):
+@app.on_message(filters.command("vid"))
+async def video_downloader(_, message: Message):
     if len(message.command) < 2:
-        return await message.reply(
-            "❌ Please provide a video URL.\n\nExample:\n/vid any_video_url",
-            quote=True
-        )
+        return await message.reply_text("❌ Please provide a video URL.\n\nExample:\n/vid Any_video_url")
 
-    url = message.text.split(None, 1)[1]
-    msg = await message.reply("🔍 Processing your request...")
+    video_url = message.text.split(None, 1)[1]
 
-    filename = "video.mp4"
-    title = ""
+    msg = await message.reply("🔍 Fetching video...")
 
-    # Try with allvideodownloader.cc
-    info = get_video_info_allvideo(url)
-    if info:
-        try:
-            title = info["title"]
-            video_data = requests.get(info["url"], stream=True, timeout=10)
-            total_length = int(video_data.headers.get('content-length', 0))
-            if total_length == 0:
-                raise Exception("Zero size")
+    # Step 1: Call API
+    payload = {
+        "url": video_url,
+        "token": "c99f113fab0762d216b4545e5c3d615eefb30f0975fe107caab629d17e51b52d"
+    }
 
-            with open(filename, "wb") as f:
-                for chunk in video_data.iter_content(chunk_size=1024*1024):
-                    if chunk:
-                        f.write(chunk)
-        except:
-            info = None  # fallback to yt-dlp
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14)",
+    }
 
-    # Fallback to yt-dlp (for YouTube etc)
-    if not info:
-        await msg.edit("⚠️ Trying fallback method for YouTube...")
-        downloaded = await download_video_ytdlp(url, filename)
-        if not downloaded:
-            return await msg.edit("❌ Failed to download the video using any method.")
-        title = "Downloaded via yt-dlp"
-
-    # Send the video
     try:
-        await msg.edit("📤 Sending video...")
-        await message.reply_video(
-            video=filename,
-            caption=f"🎬 <b>{title}</b>\n\n✅ By @ShrutiBots",
-            quote=True
+        r = requests.post("https://allvideodownloader.cc/wp-json/aio-dl/video-data/", data=payload, headers=headers)
+        data = r.json()
+
+        if "medias" not in data or not data["medias"]:
+            return await msg.edit("❌ No downloadable video found.")
+
+        # Step 2: Get best quality video URL
+        best_video = sorted(data["medias"], key=lambda x: x.get("quality", ""), reverse=True)[0]
+        video_link = best_video["url"]
+
+        # Step 3: Download the video to temp file
+        await msg.edit("⬇️ Downloading video...")
+
+        file_name = "video.mp4"
+        with requests.get(video_link, stream=True) as v:
+            with open(file_name, "wb") as f:
+                for chunk in v.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+        # Step 4: Send video to user
+        await app.send_video(
+            chat_id=message.chat.id,
+            video=file_name,
+            caption=f"🎬 {data.get('title', 'Video')}\n\n✅ By @ShrutiBots",
+            supports_streaming=True
         )
+
+        await msg.delete()
+        os.remove(file_name)
+
     except Exception as e:
         await msg.edit(f"❌ Error: {str(e)}")
-    finally:
-        if os.path.exists(filename):
-            os.remove(filename)
