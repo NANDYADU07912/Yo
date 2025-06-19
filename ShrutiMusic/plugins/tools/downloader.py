@@ -2,56 +2,58 @@ from pyrogram import filters
 from pyrogram.types import Message
 from ShrutiMusic import app
 import requests
+import os
 
-API_ENDPOINT = "https://allvideodownloader.cc/wp-json/aio-dl/video-data/"
-API_TOKEN = "c99f113fab0762d216b4545e5c3d615eefb30f0975fe107caab629d17e51b52d"
-
-@app.on_message(filters.command("vid") & filters.private)
+@app.on_message(filters.command("vid"))
 async def video_downloader(_, message: Message):
     if len(message.command) < 2:
         return await message.reply_text("❌ Please provide a video URL.\n\nExample:\n`/vid https://www.instagram.com/reel/xyz/`")
 
     video_url = message.text.split(None, 1)[1]
 
-    msg = await message.reply("🔍 Fetching video link...")
+    msg = await message.reply("🔍 Fetching video...")
 
+    # Step 1: Call API
     payload = {
         "url": video_url,
-        "token": API_TOKEN
+        "token": "c99f113fab0762d216b4545e5c3d615eefb30f0975fe107caab629d17e51b52d"
     }
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "User-Agent": "Mozilla/5.0 (Linux; Android 14)",
-        "sec-ch-ua": '"Android WebView";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-        "sec-ch-ua-mobile": "?1",
-        "sec-ch-ua-platform": '"Android"'
     }
 
     try:
-        response = requests.post(API_ENDPOINT, data=payload, headers=headers, timeout=15)
-        if response.status_code != 200:
-            return await msg.edit(f"❌ API Error: {response.status_code}")
-
-        data = response.json()
+        r = requests.post("https://allvideodownloader.cc/wp-json/aio-dl/video-data/", data=payload, headers=headers)
+        data = r.json()
 
         if "medias" not in data or not data["medias"]:
-            return await msg.edit("❌ No video found or unsupported format.")
+            return await msg.edit("❌ No downloadable video found.")
 
-        # Pick the best/highest quality video
-        best_media = sorted(data["medias"], key=lambda x: x.get("quality", ""), reverse=True)[0]
-        video_download_url = best_media["url"]
+        # Step 2: Get best quality video URL
+        best_video = sorted(data["medias"], key=lambda x: x.get("quality", ""), reverse=True)[0]
+        video_link = best_video["url"]
 
-        await msg.edit("⬇️ Downloading & sending video...")
+        # Step 3: Download the video to temp file
+        await msg.edit("⬇️ Downloading video...")
 
+        file_name = "video.mp4"
+        with requests.get(video_link, stream=True) as v:
+            with open(file_name, "wb") as f:
+                for chunk in v.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+        # Step 4: Send video to user
         await app.send_video(
             chat_id=message.chat.id,
-            video=video_download_url,
-            caption=f"🎬 <b>{data.get('title', 'Video')}</b>\n\n✅ Downloaded via @ShrutiBots",
-            thumb=data.get("thumbnail"),
+            video=file_name,
+            caption=f"🎬 {data.get('title', 'Video')}\n\n✅ By @ShrutiMusicBot",
             supports_streaming=True
         )
+
         await msg.delete()
+        os.remove(file_name)
 
     except Exception as e:
         await msg.edit(f"❌ Error: {str(e)}")
